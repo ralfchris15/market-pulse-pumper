@@ -11,42 +11,42 @@ jobs:
     steps:
       - name: Fetch, Calculate, and Sync
         run: |
+          # Install bc if not present (usually present on ubuntu-latest)
+          sudo apt-get install -y bc
+
           API_KEY_HEADER="x-cg-demo-api-key"
 
-          # 1. Fetch Global Anchor with API Key
-          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "api.coingecko.com")
+          # 1. Fetch Global Data (Corrected URL: Added https:// and full path)
+          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "https://api.coingecko.com/api/v3/global")
           
-          # CRITICAL DEBUG CHECK: Ensure data is not empty or an error
-          if [[ -z "$GLOBAL_DATA" ]]; then
-            echo "❌ ERROR: CoinGecko returned EMPTY data. Check API Key secret or network connectivity."
-            exit 1
-          fi
-
-          if [[ $GLOBAL_DATA == *"<!DOCTYPE html>"* || $GLOBAL_DATA == *'{"error":'* ]]; then
-            echo "❌ ERROR: CoinGecko returned invalid data or API error."
+          # CRITICAL DEBUG CHECK
+          if [[ -z "$GLOBAL_DATA" || "$GLOBAL_DATA" == *"error"* ]]; then
+            echo "❌ ERROR: CoinGecko Global API failed."
             echo "Response: $GLOBAL_DATA"
             exit 1
           fi
 
           GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.market_cap_percentage.btc')
           
-          # 2. Fetch Binance Index
-          BINANCE_INDEX=$(curl -s "fapi.binance.com" | jq -r '.price')
+          # 2. Fetch Binance Index (Corrected URL: Added https:// and symbol parameter)
+          # Using BTCUSDT as the standard index
+          BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT" | jq -r '.price')
           
-          # 3. Compute Precision Divisor
-          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc)
+          # 3. Compute Precision Divisor (Fixing bc formatting)
+          # bc needs leading zeros for decimals, so we use printf
+          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc | awk '{printf "%.6f", $0}')
 
-          # 4. Fetch Top 10 Narrative Heatmap with API Key
-          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "api.coingecko.com" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+          # 4. Fetch Top 10 Narrative Heatmap (Corrected URL: /coins/categories)
+          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
 
-          # 5. Push to Vercel Vault
-          curl -X POST aichartsniper.com \
+          # 5. Push to Vercel Vault (Ensure the URL is your specific API endpoint path)
+          curl -X POST "https://aichartsniper.com/api/sync-data" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
             -d "{
               \"divisor\": $DIVISOR,
               \"sectors\": \"$SECTORS\",
-              \"btcPrice\": \"auto\",
+              \"btcPrice\": \"$BINANCE_INDEX\",
               \"btcChange\": \"0.00\",
               \"btcDominance\": \"$GLOBAL_DOM%\"
             }"
