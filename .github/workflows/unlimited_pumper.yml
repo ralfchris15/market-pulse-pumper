@@ -2,51 +2,43 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Every 10 minutes
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch, Calculate, and Sync
+      - name: Fetch and Deliver Intel
         run: |
-          # Install bc if not present (usually present on ubuntu-latest)
-          sudo apt-get install -y bc
+          # 1. Fetch Global Dominance from CoinGecko
+          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/global")
+          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc' 2>/dev/null)
 
-          API_KEY_HEADER="x-cg-demo-api-key"
-
-          # 1. Fetch Global Data (Corrected URL: Added https:// and full path)
-          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "https://api.coingecko.com/api/v3/global")
-          
-          # CRITICAL DEBUG CHECK
-          if [[ -z "$GLOBAL_DATA" || "$GLOBAL_DATA" == *"error"* ]]; then
-            echo "❌ ERROR: CoinGecko Global API failed."
-            echo "Response: $GLOBAL_DATA"
+          if [[ -z "$GLOBAL_DOM" || "$GLOBAL_DOM" == "null" || "$GLOBAL_DOM" == "0" ]]; then
+            echo "CoinGecko Global API Failed"
             exit 1
           fi
 
-          GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.market_cap_percentage.btc')
-          
-          # 2. Fetch Binance Index (Corrected URL: Added https:// and symbol parameter)
-          # Using BTCUSDT as the standard index
-          BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT" | jq -r '.price')
-          
-          # 3. Compute Precision Divisor (Fixing bc formatting)
-          # bc needs leading zeros for decimals, so we use printf
-          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc | awk '{printf "%.6f", $0}')
+          # 2. Fetch Binance Dominance Index (Only needed for DIVISOR calibration)
+          BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
 
-          # 4. Fetch Top 10 Narrative Heatmap (Corrected URL: /coins/categories)
-          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+          # 3. Calculate Calibration Divisor
+          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
 
-          # 5. Push to Vercel Vault (Ensure the URL is your specific API endpoint path)
-          curl -X POST "https://aichartsniper.com/api/sync-data" \
+          # 4. Fetch Top 10 Narrative Sectors
+          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+
+          [[ -z "$SECTORS" ]] && SECTORS="AI: 0.0%, Meme: 0.0%"
+
+          # 5. Deliver strictly necessary Intel to Vercel
+          curl -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"divisor\": $DIVISOR,
-              \"sectors\": \"$SECTORS\",
-              \"btcPrice\": \"$BINANCE_INDEX\",
+              \"btcPrice\": \"LIVE\",
               \"btcChange\": \"0.00\",
-              \"btcDominance\": \"$GLOBAL_DOM%\"
+              \"btcDominance\": \"$GLOBAL_DOM%\",
+              \"sectors\": \"$SECTORS\",
+              \"divisor\": $DIVISOR
             }"
