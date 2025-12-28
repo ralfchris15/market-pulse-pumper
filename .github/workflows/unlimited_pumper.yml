@@ -30,7 +30,7 @@ jobs:
 
           GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.market_cap_percentage.btc')
           
-          # 2. Fetch Binance Index (Binance API typically doesn't need a key)
+          # 2. Fetch Binance Index
           BINANCE_INDEX=$(curl -s "fapi.binance.com" | jq -r '.price')
           
           # 3. Compute Precision Divisor
