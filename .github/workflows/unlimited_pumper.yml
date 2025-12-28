@@ -2,7 +2,7 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Every 5 minutes
+    - cron: '*/5 * * * *' # Runs every 5 minutes
   workflow_dispatch:
 
 jobs:
@@ -11,37 +11,35 @@ jobs:
     steps:
       - name: Fetch and Deliver Intel
         run: |
-          # 1. Fetch Global Dominance
-          # Added --compressed and removed unnecessary headers that sometimes trigger WAFs
+          # 1. Fetch Global Dominance from CoinGecko
           GLOBAL_DATA=$(curl -s --compressed \
+            -H "accept: application/json" \
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
-            -H "Accept: application/json" \
             "https://api.coingecko.com/api/v3/global")
           
-          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc' 2>/dev/null)
-
-          if [[ -z "$GLOBAL_DOM" || "$GLOBAL_DOM" == "null" ]]; then
-            echo "❌ API ERROR: CoinGecko returned invalid data."
-            echo "Response: $GLOBAL_DATA"
-            exit 1
-          fi
+          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc')
 
           # 2. Fetch Binance Dominance Index
           BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
 
           # 3. Calculate Calibration Divisor
-          # Fix: We add a leading zero using awk because 'bc' outputs .85 instead of 0.85, which breaks JSON
-          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l | awk '{printf "%.6f", $0}')
+          # Precision check: printf ensures we always send a valid number (e.g., 0.85 instead of .85)
+          RAW_DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
+          DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
 
           # 4. Fetch Top 10 Narratives
           SECTORS=$(curl -s --compressed \
+            -H "accept: application/json" \
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
             "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | round / 1)%") | join(", ")')
 
-          # 5. Deliver to Vercel KV (Using your Vercel backend URL)
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
+          # 5. Deliver to Vercel (Hardened against 403 blocks)
+          # Added a real User-Agent and Origin to bypass Vercel's Bot Firewall
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Origin: https://aichartsniper.com" \
             -d "{
               \"btcPrice\": \"LIVE\",
               \"btcChange\": \"0.00\",
@@ -50,9 +48,10 @@ jobs:
               \"divisor\": $DIVISOR
             }")
 
-          if [ "$RESPONSE" -eq 200 ]; then
-            echo "✅ SUCCESS: Data synced to Vercel KV (Status: $RESPONSE)"
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ SUCCESS: Data pumped to Vercel KV (Status: $HTTP_STATUS)"
           else
-            echo "❌ ERROR: Vercel rejected the data (Status: $RESPONSE)"
+            echo "❌ FIREWALL ERROR: Vercel rejected the request with Status $HTTP_STATUS."
+            echo "Check if the API route '/api/analyze' is deployed and public."
             exit 1
           fi
