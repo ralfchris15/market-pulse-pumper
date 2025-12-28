@@ -2,8 +2,8 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Every 5 minutes (Unlimited in Public Repos)
-  workflow_dispatch:      # Allows you to manually trigger a sync
+    - cron: '*/5 * * * *' # Every 5 minutes
+  workflow_dispatch:      # Manual trigger
 
 jobs:
   pump-data:
@@ -11,14 +11,16 @@ jobs:
     steps:
       - name: Fetch, Calculate, and Sync
         run: |
-          # 1. Fetch Global Dominance from CMC Public Endpoint
-          # Using an alternate source to bypass current API blocks
-          GLOBAL_DATA=$(curl -s "https://api.coinmarketcap.com/data-api/v3/global-metrics/quotes/latest")
-          GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.btcDominance')
+          # 1. Fetch Global Dominance with Browser-Identity Headers
+          # Using a common User-Agent helps bypass automated blocks
+          RESPONSE=$(curl -s -H "User-Agent: Mozilla/5.0" "https://api.coinmarketcap.com/data-api/v3/global-metrics/quotes/latest")
+          
+          # Check if response is valid JSON and contains the data we need
+          GLOBAL_DOM=$(echo "$RESPONSE" | jq -r '.data.btcDominance' 2>/dev/null)
 
-          # 🚨 Error Catch: Exit if the data is blocked or empty
           if [[ -z "$GLOBAL_DOM" || "$GLOBAL_DOM" == "null" ]]; then
-            echo "❌ ERROR: Data source blocked. Check source availability."
+            echo "❌ ERROR: Data source blocked or invalid JSON received."
+            echo "Raw Response Snippet: ${RESPONSE:0:100}"
             exit 1
           fi
           
@@ -26,14 +28,13 @@ jobs:
           BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
           
           # 3. Compute the Calibration Divisor
-          # Formula: Binance Index / Real Global Dominance
           DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc)
 
-          # 4. Fetch Top 10 Trending Crypto Narratives (Heatmap)
-          SECTORS=$(curl -s "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/category/listing?start=1&limit=10&sortBy=market_cap_change_24h&sortType=desc" | jq -r '[.data.cryptoCategories[] | "\(.name): \(.marketCapChange24h | tonumber | . * 100 | round / 100)%"] | join(", ")')
+          # 4. Fetch Narrative Heatmap (Top 10 categories)
+          SECTORS=$(curl -s -H "User-Agent: Mozilla/5.0" "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/category/listing?start=1&limit=10&sortBy=market_cap_change_24h&sortType=desc" | jq -r '[.data.cryptoCategories[] | "\(.name): \(.marketCapChange24h | tonumber | . * 100 | round / 100)%"] | join(", ")')
 
-          # 5. Push Data to your Vercel Vault
-          # Fallback: If sectors fail, send a default to prevent script crash
+          # 5. Push to Vercel Vault
+          # If sectors fail, use a safe default string
           [[ -z "$SECTORS" ]] && SECTORS="AI: 0.0%, Meme: 0.0%"
 
           curl -X POST https://aichartsniper.com/api/analyze \
