@@ -8,10 +8,17 @@ jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch, Calculate, and Sync
+     - name: Fetch, Calculate, and Sync
         run: |
-          # 1. Fetch Global Anchor (Retry logic for reliability)
-          GLOBAL_DATA=$(curl -s --retry 3 https://api.coingecko.com/api/v3/global)
+          # 1. Fetch Global Anchor with "Shield" Headers
+          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/global")
+          
+          # Debug check: If GLOBAL_DATA contains HTML, stop here
+          if [[ $GLOBAL_DATA == *"<!DOCTYPE html>"* ]]; then
+            echo "❌ ERROR: CoinGecko returned HTML instead of data. Blocked by Firewall."
+            exit 1
+          fi
+
           GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.market_cap_percentage.btc')
           
           # 2. Fetch Binance Index
@@ -21,9 +28,8 @@ jobs:
           # Formula: Index / Global Percentage = Calibration Key
           DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc)
 
-          # 4. Fetch Top 10 Narrative Heatmap
-          # Sorts by 24h change and removes nulls
-          SECTORS=$(curl -s https://api.coingecko.com/api/v3/coins/categories | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+          # 4. Fetch Top 10 Narrative Heatmap with Shield Headers
+          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
 
           # 5. Push to Vercel Vault
           curl -X POST https://aichartsniper.com/api/analyze \
