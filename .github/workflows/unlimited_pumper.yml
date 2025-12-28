@@ -11,27 +11,23 @@ jobs:
     steps:
       - name: Fetch and Deliver Intel
         run: |
-          # 1. Fetch Global Dominance from CoinGecko
-          GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/global")
+          GLOBAL_DATA=$(curl -s -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/global")
+          
           GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc' 2>/dev/null)
 
           if [[ -z "$GLOBAL_DOM" || "$GLOBAL_DOM" == "null" || "$GLOBAL_DOM" == "0" ]]; then
-            echo "CoinGecko Global API Failed"
+            echo "Error: CoinGecko Global API Failed. Response: $GLOBAL_DATA"
             exit 1
           fi
 
-          # 2. Fetch Binance Dominance Index (Only needed for DIVISOR calibration)
           BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
 
-          # 3. Calculate Calibration Divisor
           DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
 
-          # 4. Fetch Top 10 Narrative Sectors
-          SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+          SECTORS=$(curl -s -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" -H "User-Agent: Mozilla/5.0" "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
 
           [[ -z "$SECTORS" ]] && SECTORS="AI: 0.0%, Meme: 0.0%"
 
-          # 5. Deliver strictly necessary Intel to Vercel
           curl -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
