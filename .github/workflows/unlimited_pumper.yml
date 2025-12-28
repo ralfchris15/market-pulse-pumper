@@ -2,22 +2,26 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Every 5 minutes
+    - cron: '*/10 * * * *' # Every 10 minutes
   workflow_dispatch:      # Allows manual trigger
 
 jobs:
-  pump-data:              # This is the job ID
+  pump-data:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch, Calculate, and Sync
         run: |
-          # Use the correct header name "x-cg-demo-api-key" or "x-cg-pro-api-key"
           API_KEY_HEADER="x-cg-demo-api-key"
 
           # 1. Fetch Global Anchor with API Key
           GLOBAL_DATA=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "api.coingecko.com")
           
-          # Debug check: If GLOBAL_DATA contains HTML or an API error, stop here
+          # CRITICAL DEBUG CHECK: Ensure data is not empty or an error
+          if [[ -z "$GLOBAL_DATA" ]]; then
+            echo "❌ ERROR: CoinGecko returned EMPTY data. Check API Key secret or network connectivity."
+            exit 1
+          fi
+
           if [[ $GLOBAL_DATA == *"<!DOCTYPE html>"* || $GLOBAL_DATA == *'{"error":'* ]]; then
             echo "❌ ERROR: CoinGecko returned invalid data or API error."
             echo "Response: $GLOBAL_DATA"
@@ -35,7 +39,7 @@ jobs:
           # 4. Fetch Top 10 Narrative Heatmap with API Key
           SECTORS=$(curl -s -H "accept: application/json" -H "User-Agent: Mozilla/5.0" -H "$API_KEY_HEADER: ${{ secrets.COINGECKO_API_KEY }}" "api.coingecko.com" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
 
-          # 5. Push to Vercel Vault (using existing secret name)
+          # 5. Push to Vercel Vault
           curl -X POST aichartsniper.com \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
