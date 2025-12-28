@@ -1,0 +1,38 @@
+name: Market Data Pumper
+on:
+  schedule:
+    - cron: '*/5 * * * *' 
+  workflow_dispatch: 
+
+jobs:
+  pump-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch, Calculate, and Sync
+        run: |
+          # 1. Fetch Global Anchor (Retry logic for reliability)
+          GLOBAL_DATA=$(curl -s --retry 3 https://api.coingecko.com/api/v3/global)
+          GLOBAL_DOM=$(echo $GLOBAL_DATA | jq -r '.data.market_cap_percentage.btc')
+          
+          # 2. Fetch Binance Index
+          BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
+          
+          # 3. Compute Precision Divisor
+          # Formula: Index / Global Percentage = Calibration Key
+          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc)
+
+          # 4. Fetch Top 10 Narrative Heatmap
+          # Sorts by 24h change and removes nulls
+          SECTORS=$(curl -s https://api.coingecko.com/api/v3/coins/categories | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | . * 100 | round / 100)%") | join(", ")')
+
+          # 5. Push to Vercel Vault
+          curl -X POST https://aichartsniper.com/api/analyze \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"divisor\": $DIVISOR,
+              \"sectors\": \"$SECTORS\",
+              \"btcPrice\": \"auto\",
+              \"btcChange\": \"0.00\",
+              \"btcDominance\": \"$GLOBAL_DOM%\"
+            }"
