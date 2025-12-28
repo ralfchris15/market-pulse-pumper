@@ -2,8 +2,8 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Every 5 minutes
-  workflow_dispatch:      # Manual trigger
+    - cron: '*/5 * * * *' # Every 5 minutes (Unlimited in Public Repos)
+  workflow_dispatch:      # Manual trigger for trading sessions
 
 jobs:
   pump-data:
@@ -28,7 +28,8 @@ jobs:
           BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price')
           
           # 3. Compute the Calibration Divisor
-          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc)
+          # Use bc -l for high-precision decimal math
+          DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
 
           # 4. Fetch Narrative Heatmap (Top 10 categories)
           SECTORS=$(curl -s -H "User-Agent: Mozilla/5.0" "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/category/listing?start=1&limit=10&sortBy=market_cap_change_24h&sortType=desc" | jq -r '[.data.cryptoCategories[] | "\(.name): \(.marketCapChange24h | tonumber | . * 100 | round / 100)%"] | join(", ")')
