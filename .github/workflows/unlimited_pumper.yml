@@ -32,24 +32,30 @@ jobs:
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
              "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%") | join(", ")')
 
-          # 5. Deliver to Vercel
+          # 5. GENERATE SECURE JSON PAYLOAD FILE
+          # This creates a perfectly formatted file regardless of special characters in $SECTORS
+          jq -n \
+            --arg btcIndex "$BINANCE_INDEX" \
+            --arg btcChange "0.00" \
+            --arg btcDom "$GLOBAL_DOM%" \
+            --arg sec "$SECTORS" \
+            --arg div "$DIVISOR" \
+            '{btcPrice: $btcIndex, btcChange: $btcChange, btcDominance: $btcDom, sectors: $sec, divisor: ($div|tonumber)}' > payload.json
+
+          # 6. Deliver to Vercel via @ notation
+          # The @payload.json tells curl to send the file content as the body
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
             -H "Origin: https://aichartsniper.com" \
-            -d "{
-              \"btcPrice\": \"LIVE\",
-              \"btcChange\": \"0.00\",
-              \"btcDominance\": \"$GLOBAL_DOM%\",
-              \"sectors\": \"$SECTORS\",
-              \"divisor\": $DIVISOR
-            }")
+            -d @payload.json)
 
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ SUCCESS: Data pumped to Vercel KV (Status: $HTTP_STATUS)"
-            echo "Sectors Sent: $SECTORS"
+            echo "✅ SUCCESS: $HTTP_STATUS - Full Market Map Synchronized."
           else
-            echo "❌ ERROR: Vercel Status $HTTP_STATUS"
+            echo "❌ CRITICAL ERROR: Vercel rejected payload with Status $HTTP_STATUS"
+            # Print the payload for debugging if it fails
+            cat payload.json
             exit 1
           fi
