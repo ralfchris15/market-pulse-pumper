@@ -27,11 +27,11 @@ jobs:
           RAW_DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
           DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
 
-          # 4. Fetch Top 10 Narratives
+          # 4. Fetch all Coingecko Narratives
           SECTORS=$(curl -s --compressed \
             -H "accept: application/json" \
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
-            "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | .[0:10] | map("\(.name): \(.market_cap_change_24h | tonumber | round / 1)%") | join(", ")')
+            "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%") | join(", ")')
 
           # 5. Deliver to Vercel (Hardened against 403 blocks)
           # Added a real User-Agent and Origin to bypass Vercel's Bot Firewall
