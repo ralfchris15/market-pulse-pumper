@@ -2,7 +2,7 @@ name: Market Data Pumper
 
 on:
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '*/1 * * * *'
   workflow_dispatch:
 
 jobs:
