@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch and Deliver Intel
+        env:
+          # Injecting your GitHub Secret into the environment
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
         run: |
           # 1. Fetch Global Dominance from CoinGecko
           GLOBAL_DATA=$(curl -s --compressed \
@@ -19,13 +22,14 @@ jobs:
           
           GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
 
-          # 2. Fetch BTC Price & Change (Binance with CoinGecko Fallback)
+          # 2. Fetch BTC Price & Change (Binance with API Key + Fallback)
           echo "Attempting Binance Fetch..."
-          BINANCE_BTC=$(curl -s "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
+          BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+            "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
           
-          # Extract values or set to empty if missing/null
           BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice // empty')
           BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
+
           # --- FALLBACK GATE ---
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" == "null" ]; then
             echo "⚠️ Binance Rate-Limited. Deploying CoinGecko Fallback..."
@@ -38,9 +42,11 @@ jobs:
             BTC_CHANGE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd_24h_change // empty')
           fi
 
-          # 3. Fetch Binance Dominance Index and 24h Change (BTCDOMUSDT)
+          # 3. Fetch Binance Dominance Index (BTCDOMUSDT) with API Key
           echo "Fetching BTCDOMUSDT 24hr data..."
-          BINANCE_DOM_24HR=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
+          BINANCE_DOM_24HR=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+            "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
+
           if [ -z "$BINANCE_DOM_24HR" ] || [ "$BINANCE_DOM_24HR" == "null" ]; then
             echo "⚠️ Binance Dominance Fetch Failed. Setting Defaults..."
             BINANCE_DOM="0.00"
@@ -52,7 +58,7 @@ jobs:
 
           # 4. Final Safety Check
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" == "null" ]; then
-            echo "❌ CRITICAL: All Price APIs failed. Aborting to protect KV store integrity."
+            echo "❌ CRITICAL: All Price APIs failed. Aborting."
             exit 1
           fi
 
@@ -60,7 +66,7 @@ jobs:
           RAW_DIVISOR=$(echo "scale=6; $BINANCE_DOM / $GLOBAL_DOM" | bc -l)
           DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
 
-          # 6. Fetch ALL Narratives (600+)
+          # 6. Fetch ALL Narratives
           SECTORS=$(curl -s --compressed \
             -H "accept: application/json" \
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
