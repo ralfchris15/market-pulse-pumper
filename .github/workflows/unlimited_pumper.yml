@@ -17,7 +17,7 @@ jobs:
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
             "https://api.coingecko.com/api/v3/global")
           
-          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
+          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.[data].market_cap_percentage.btc // empty')
 
           # 2. Fetch BTC Price & Change (Binance with CoinGecko Fallback)
           echo "Attempting Binance Fetch..."
@@ -26,7 +26,6 @@ jobs:
           # Extract values or set to empty if missing/null
           BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice // empty')
           BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
-
           # --- FALLBACK GATE ---
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" == "null" ]; then
             echo "⚠️ Binance Rate-Limited. Deploying CoinGecko Fallback..."
@@ -34,13 +33,22 @@ jobs:
               -H "accept: application/json" \
               -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
               "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true")
-            
+           
             BTC_PRICE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd // empty')
             BTC_CHANGE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd_24h_change // empty')
           fi
 
-          # 3. Fetch Binance Dominance Index
-          BINANCE_INDEX=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCDOMUSDT" | jq -r '.price // "0.00"')
+          # 3. Fetch Binance Dominance Index and 24h Change (BTCDOMUSDT)
+          echo "Fetching BTCDOMUSDT 24hr data..."
+          BINANCE_DOM_24HR=$(curl -s "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
+          if [ -z "$BINANCE_DOM_24HR" ] || [ "$BINANCE_DOM_24HR" == "null" ]; then
+            echo "⚠️ Binance Dominance Fetch Failed. Setting Defaults..."
+            BINANCE_DOM="0.00"
+            DOM_CHANGE="0.00"
+          else
+            BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
+            DOM_CHANGE=$(echo "$BINANCE_DOM_24HR" | jq -r '.priceChangePercent // "0.00"')
+          fi
 
           # 4. Final Safety Check
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" == "null" ]; then
@@ -49,7 +57,7 @@ jobs:
           fi
 
           # 5. Calculate Calibration Divisor
-          RAW_DIVISOR=$(echo "scale=6; $BINANCE_INDEX / $GLOBAL_DOM" | bc -l)
+          RAW_DIVISOR=$(echo "scale=6; $BINANCE_DOM / $GLOBAL_DOM" | bc -l)
           DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
 
           # 6. Fetch ALL Narratives (600+)
@@ -63,9 +71,10 @@ jobs:
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
+            --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            '{btcPrice: $btcPrice, btcChange: $btcChange, btcDominance: $btcDom, sectors: $sec, divisor: ($div|tonumber)}' > payload.json
+            '{btcPrice: $btcPrice, btcChange: $btcChange, btcDominance: $btcDom, btcDomChange: $domChange, sectors: $sec, divisor: ($div|tonumber)}' > payload.json
 
           # 8. Deliver to Vercel
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
@@ -74,7 +83,7 @@ jobs:
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
             -H "Origin: https://aichartsniper.com" \
             -d @payload.json)
-
+          
           if [ "$HTTP_STATUS" -eq 200 ]; then
             echo "✅ SUCCESS: $HTTP_STATUS - Full Market Map Synchronized."
           else
