@@ -11,8 +11,8 @@ jobs:
     steps:
       - name: Fetch and Deliver Intel
         env:
-          # Injecting your GitHub Secret into the environment
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
         run: |
           # 1. Fetch Global Dominance from CoinGecko
           GLOBAL_DATA=$(curl -s --compressed \
@@ -72,6 +72,21 @@ jobs:
             -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
             "https://api.coingecko.com/api/v3/coins/categories" | jq -r '[.[] | select(.market_cap_change_24h != null)] | sort_by(.market_cap_change_24h) | reverse | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%") | join(", ")')
 
+          # 6.5 Fetch BTC Global News (Last 4 Hours)
+          BTC_NEWS_RAW=$(curl -s \
+            "https://cryptopanic.com/api/v1/posts/?auth_token=$CRYPTOPANIC_KEY&currencies=BTC&public=true")
+
+          BTC_NEWS=$(echo "$BTC_NEWS_RAW" | jq '
+            [.results[]
+              | select((now - (.published_at | fromdateiso8601)) <= 14400)
+              | {
+                  title: .title,
+                  source: (.source.title // "Unknown"),
+                  publishedAt: .published_at
+                }
+            ] | .[:3]
+          ')
+
           # 7. GENERATE SECURE JSON PAYLOAD FILE
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
@@ -80,7 +95,16 @@ jobs:
             --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            '{btcPrice: $btcPrice, btcChange: $btcChange, btcDominance: $btcDom, btcDomChange: $domChange, sectors: $sec, divisor: ($div|tonumber)}' > payload.json
+            --argjson btcNews "$BTC_NEWS" \
+            '{
+              btcPrice: $btcPrice,
+              btcChange: $btcChange,
+              btcDominance: $btcDom,
+              btcDomChange: $domChange,
+              sectors: $sec,
+              divisor: ($div|tonumber),
+              btcNews: $btcNews
+            }' > payload.json
 
           # 8. Deliver to Vercel
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
