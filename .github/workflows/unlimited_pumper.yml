@@ -92,43 +92,52 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (ROBUST VERSION)
+          # 6.5 BTC GLOBAL NEWS (ROBUST)
           ############################################
           echo "📰 Fetching BTC global news..."
-
-          # Fetch titles using a User-Agent to avoid blocks
-          # Use grep to extract content safely
-          RAW_TITLES=$(curl -s -A "Mozilla/5.0" "https://cointelegraph.com/rss/tag/bitcoin" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 || echo "")
-
-          # Convert raw lines into a PROPER JSON array using jq (handles quotes/special chars)
-          if [ -n "$RAW_TITLES" ]; then
-            BTC_NEWS=$(echo "$RAW_TITLES" | jq -R . | jq -s 'map({title: ., source: "CoinTelegraph", publishedAt: "Just Now"})')
+          # Fetch using a real User-Agent to avoid 403 blocks
+          # Cointelegraph is more reliable than Coindesk for simple curl
+          RSS_DATA=$(curl -s -A "Mozilla/5.0" "https://cointelegraph.com/rss/tag/bitcoin" || echo "")
+          
+          # Extract titles safely using grep (handles CDATA and quotes)
+          # If no news found, it creates an empty JSON array []
+          if [ -n "$RSS_DATA" ]; then
+            BTC_NEWS=$(echo "$RSS_DATA" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 | jq -R . | jq -s 'map({title: ., source: "CoinTelegraph", publishedAt: "Just Now"})')
           else
             BTC_NEWS="[]"
           fi
 
           ############################################
-          # 7. BUILD PAYLOAD (STRICT JSON)
+          # 7. BUILD PAYLOAD (STRICT TYPES)
           ############################################
+          # Ensure divisor is never exactly 0 to avoid backend math errors
+          SAFE_DIVISOR=${DIVISOR:-79.05}
+
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
-            --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
-            --arg div "$DIVISOR" \
+            --arg div "$SAFE_DIVISOR" \
             --argjson btcNews "$BTC_NEWS" \
-            --argjson btcNewsLastUpdated "$(date +%s)" \
+            --arg btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
               btcChange: $btcChange,
               btcDominance: $btcDom,
-              btcDomChange: $domChange,
               sectors: $sec,
               divisor: ($div | tonumber),
               btcNews: $btcNews,
-              btcNewsLastUpdated: $btcNewsLastUpdated
+              btcNewsLastUpdated: ($btcNewsLastUpdated | tonumber)
             }' > payload.json
+
+          ############################################
+          # 8. DELIVER TO BACKEND
+          ############################################
+          curl -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
+            -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d @payload.json
 
           ############################################
           # 8. DELIVER TO BACKEND
