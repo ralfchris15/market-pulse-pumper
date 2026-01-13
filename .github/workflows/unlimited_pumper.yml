@@ -118,7 +118,7 @@ jobs:
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
             --arg sec "$SECTORS" \
-            --arg div "$SAFE_DIVISOR" \
+            --arg div "$DIVISOR" \
             --argjson btcNews "$BTC_NEWS" \
             --arg btcNewsLastUpdated "$(date +%s)" \
             '{
