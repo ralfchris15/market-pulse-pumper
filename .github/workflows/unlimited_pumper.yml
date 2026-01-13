@@ -96,19 +96,20 @@ jobs:
           ############################################
           echo "📰 Fetching BTC global news..."
 
-          # Fetch and convert to a safe JSON array
-          # If curl fails or news is empty, we force an empty array [ ]
-          RAW_NEWS=$(curl -s "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 || echo "")
-          
-          # Convert newline list to JSON array safely
-          BTC_NEWS_JSON=$(echo "$RAW_NEWS" | jq -R . | jq -s 'map({title: ., source: "CoinDesk", publishedAt: "Just Now"})')
+          # Fetch titles using a User-Agent to avoid blocks
+          # Use grep to extract content safely
+          RAW_TITLES=$(curl -s -A "Mozilla/5.0" "https://cointelegraph.com/rss/tag/bitcoin" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 || echo "")
 
-          if [ -z "$RAW_NEWS" ]; then BTC_NEWS_JSON="[]"; fi
+          # Convert raw lines into a PROPER JSON array using jq (handles quotes/special chars)
+          if [ -n "$RAW_TITLES" ]; then
+            BTC_NEWS=$(echo "$RAW_TITLES" | jq -R . | jq -s 'map({title: ., source: "CoinTelegraph", publishedAt: "Just Now"})')
+          else
+            BTC_NEWS="[]"
+          fi
 
           ############################################
-          # 7. BUILD PAYLOAD (SAFE ARGUMENTS)
+          # 7. BUILD PAYLOAD (STRICT JSON)
           ############################################
-          # Using --arg for strings and --argjson ONLY when we are sure it is valid JSON
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
@@ -116,8 +117,8 @@ jobs:
             --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews "$BTC_NEWS_JSON" \
-            --arg btcNewsLastUpdated "$(date +%s)" \
+            --argjson btcNews "$BTC_NEWS" \
+            --argjson btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
               btcChange: $btcChange,
@@ -126,7 +127,7 @@ jobs:
               sectors: $sec,
               divisor: ($div | tonumber),
               btcNews: $btcNews,
-              btcNewsLastUpdated: ($btcNewsLastUpdated | tonumber)
+              btcNewsLastUpdated: $btcNewsLastUpdated
             }' > payload.json
 
           ############################################
