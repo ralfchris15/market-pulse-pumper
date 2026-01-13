@@ -103,16 +103,15 @@ jobs:
           BTC_NEWS_DATA=$(cat btc_news.json)
 
           ############################################
-          # 7. BUILD PAYLOAD
+          # 7. BUILD PAYLOAD (DIRECT NEWS INJECTION)
           ############################################
-         
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews "$BTC_NEWS_DATA" \
+            --argjson btcNews "$(cat btc_news.json)" \
             --arg btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
