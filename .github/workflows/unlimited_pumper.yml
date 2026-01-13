@@ -9,10 +9,15 @@ jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq bc xmlstarlet
+
       - name: Fetch and Deliver Intel
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          INTERNAL_SYNC_SECRET: ${{ secrets.INTERNAL_SYNC_SECRET }}
         run: |
           set -e
 
@@ -24,20 +29,18 @@ jobs:
             -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
             "https://api.coingecko.com/api/v3/global")
 
-          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
+          GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc')
 
           ############################################
           # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
           ############################################
-          echo "Attempting Binance Fetch..."
           BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
 
-          BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice // empty')
-          BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
+          BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice')
+          BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent')
 
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" = "null" ]; then
-            echo "⚠️ Binance Rate-Limited. Using CoinGecko fallback..."
             CG_FALLBACK=$(curl -s --compressed \
               -H "accept: application/json" \
               -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
@@ -48,36 +51,21 @@ jobs:
           fi
 
           ############################################
-          # 3. BTC DOM INDEX (BINANCE SAFE MODE)
+          # 3. BTC DOM INDEX (BINANCE)
           ############################################
-          echo "Fetching BTCDOMUSDT 24hr data..."
           BINANCE_DOM_24HR=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
 
-          if echo "$BINANCE_DOM_24HR" | jq -e . >/dev/null 2>&1; then
-            BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
-            DOM_CHANGE=$(echo "$BINANCE_DOM_24HR" | jq -r '.priceChangePercent // "0.00"')
-          else
-            BINANCE_DOM="0.00"
-            DOM_CHANGE="0.00"
-          fi
+          BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
 
           ############################################
-          # 4. FINAL SAFETY CHECK
-          ############################################
-          if [ -z "$BTC_PRICE" ]; then
-            echo "❌ CRITICAL: BTC price unavailable."
-            exit 1
-          fi
-
-          ############################################
-          # 5. CALIBRATION DIVISOR
+          # 4. CALIBRATION DIVISOR
           ############################################
           RAW_DIVISOR=$(echo "scale=6; $BINANCE_DOM / $GLOBAL_DOM" | bc -l)
           DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
 
           ############################################
-          # 6. NARRATIVE HEATMAP
+          # 5. NARRATIVE HEATMAP
           ############################################
           SECTORS=$(curl -s --compressed \
             -H "accept: application/json" \
@@ -90,45 +78,26 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (JSON RSS — GUARANTEED)
+          # 6. BTC GLOBAL NEWS (RAW RSS – GUARANTEED)
           ############################################
-          echo "📰 Fetching BTC global news (JSON RSS)..."
-
-          fetch_news () {
-            curl -s "$1" | jq -c --arg src "$2" '
-              .items[]?
-              | select(.title != null)
-              | {
-                  title: .title,
-                  source: $src,
-                  publishedAt: (.pubDate // .published // .date // "Unknown")
-                }
-            '
+          fetch_rss () {
+            curl -s "$1" |
+            xmlstarlet sel -t -m "//item[position()<=3]" \
+              -v "concat('{\"title\":\"', normalize-space(title), '\",\"source\":\"$2\",\"publishedAt\":\"', normalize-space(pubDate), '\"}')" -n
           }
 
-          BTC_NEWS_RAW=$(jq -s '
-            unique_by(.title)
-            | .[:3]
-          ' <(
-            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
-            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
-          ))
-
-          # 🔥 HARD GUARANTEE: btcNews is ALWAYS a JSON array
-          if [ -z "$BTC_NEWS_RAW" ] || [ "$BTC_NEWS_RAW" = "null" ]; then
-            BTC_NEWS='[]'
-          else
-            BTC_NEWS="$BTC_NEWS_RAW"
-          fi
+          BTC_NEWS=$(printf "[%s]" "$((
+            fetch_rss "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
+            fetch_rss "https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
+          ) | sed 's/}$/},/g' | sed '$ s/,$//' )")
 
           ############################################
-          # 7. BUILD PAYLOAD (NO UNDEFINED POSSIBLE)
+          # 7. BUILD PAYLOAD
           ############################################
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
-            --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
             --argjson btcNews "$BTC_NEWS" \
@@ -136,7 +105,6 @@ jobs:
               btcPrice: $btcPrice,
               btcChange: $btcChange,
               btcDominance: $btcDom,
-              btcDomChange: $domChange,
               sectors: $sec,
               divisor: ($div | tonumber),
               btcNews: $btcNews
@@ -145,17 +113,9 @@ jobs:
           ############################################
           # 8. DELIVER TO BACKEND
           ############################################
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+          curl -s -X POST \
             "https://crypto-ai-tool.vercel.app/api/analyze" \
-            -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
+            -H "Authorization: Bearer $INTERNAL_SYNC_SECRET" \
             -H "Content-Type: application/json" \
             -H "Origin: https://aichartsniper.com" \
-            -d @payload.json)
-
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ MARKET MAP SYNCED"
-          else
-            echo "❌ BACKEND ERROR: $HTTP_STATUS"
-            cat payload.json
-            exit 1
-          fi
+            -d @payload.json
