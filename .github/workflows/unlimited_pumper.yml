@@ -9,6 +9,13 @@ jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Fetch and Deliver Intel
         env:
@@ -28,7 +35,7 @@ jobs:
           GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
 
           ############################################
-          # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
+          # 2. BTC PRICE & 24H CHANGE
           ############################################
           echo "Attempting Binance Fetch..."
           BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
@@ -49,23 +56,20 @@ jobs:
           fi
 
           ############################################
-          # 3. BTC DOM INDEX (BINANCE SAFE MODE)
+          # 3. BTC DOM INDEX (FOR DIVISOR)
           ############################################
-          echo "Fetching BTCDOMUSDT 24hr data..."
+          echo "Fetching BTCDOMUSDT..."
           BINANCE_DOM_24HR=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
 
           if echo "$BINANCE_DOM_24HR" | jq -e . >/dev/null 2>&1; then
             BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
-            DOM_CHANGE=$(echo "$BINANCE_DOM_24HR" | jq -r '.priceChangePercent // "0.00"')
           else
-            echo "⚠️ Invalid Binance DOM response. Using defaults."
             BINANCE_DOM="0.00"
-            DOM_CHANGE="0.00"
           fi
 
           ############################################
-          # 4. FINAL SAFETY CHECK
+          # 4. SAFETY CHECK
           ############################################
           if [ -z "$BTC_PRICE" ]; then
             echo "❌ CRITICAL: BTC price unavailable."
@@ -91,14 +95,14 @@ jobs:
               | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%")
               | join(", ")')
 
-         ############################################
+          ############################################
           # 6.5 FETCH NEWS VIA NODE SCRIPT
           ############################################
           node fetch-news.js
           BTC_NEWS=$(cat btc_news.json)
 
           ############################################
-          # 7. BUILD PAYLOAD (KEEPING YOUR DIVISOR)
+          # 7. BUILD PAYLOAD (KEEPING DIVISOR)
           ############################################
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
@@ -117,14 +121,6 @@ jobs:
               btcNews: $btcNews,
               btcNewsLastUpdated: ($btcNewsLastUpdated | tonumber)
             }' > payload.json
-
-          ############################################
-          # 8. DELIVER TO VERCEL
-          ############################################
-          curl -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
-            -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
-            -H "Content-Type: application/json" \
-            -d @payload.json
 
           ############################################
           # 8. DELIVER TO BACKEND
