@@ -9,7 +9,6 @@ jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
-
       - name: Fetch and Deliver Intel
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
@@ -59,7 +58,6 @@ jobs:
             BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
             DOM_CHANGE=$(echo "$BINANCE_DOM_24HR" | jq -r '.priceChangePercent // "0.00"')
           else
-            echo "⚠️ Invalid Binance DOM response. Using defaults."
             BINANCE_DOM="0.00"
             DOM_CHANGE="0.00"
           fi
@@ -92,7 +90,7 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (JSON RSS — SAFE MODE)
+          # 6.5 BTC GLOBAL NEWS (JSON RSS — GUARANTEED)
           ############################################
           echo "📰 Fetching BTC global news (JSON RSS)..."
 
@@ -108,7 +106,7 @@ jobs:
             '
           }
 
-          BTC_NEWS=$(jq -s '
+          BTC_NEWS_RAW=$(jq -s '
             unique_by(.title)
             | .[:3]
           ' <(
@@ -116,8 +114,15 @@ jobs:
             fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
           ))
 
+          # 🔥 HARD GUARANTEE: btcNews is ALWAYS a JSON array
+          if [ -z "$BTC_NEWS_RAW" ] || [ "$BTC_NEWS_RAW" = "null" ]; then
+            BTC_NEWS='[]'
+          else
+            BTC_NEWS="$BTC_NEWS_RAW"
+          fi
+
           ############################################
-          # 7. BUILD PAYLOAD
+          # 7. BUILD PAYLOAD (NO UNDEFINED POSSIBLE)
           ############################################
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
