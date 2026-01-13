@@ -132,7 +132,8 @@ jobs:
             --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews '[{"title":"Test BTC News 1","source":"Test","publishedAt":"Just Now"},{"title":"Test BTC News 2","source":"Test","publishedAt":"Just Now"}]' \
+            --argjson btcNews "$BTC_NEWS" \
+            --arg btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
               btcChange: $btcChange,
@@ -140,7 +141,8 @@ jobs:
               btcDomChange: $domChange,
               sectors: $sec,
               divisor: ($div | tonumber),
-              btcNews: $btcNews
+              btcNews: $btcNews,
+              btcNewsLastUpdated: ($btcNewsLastUpdated | tonumber)
             }' > payload.json
 
           ############################################
