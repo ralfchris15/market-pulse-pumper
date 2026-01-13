@@ -99,18 +99,20 @@ jobs:
           # 6.5 FETCH NEWS VIA NODE SCRIPT
           ############################################
           node fetch-news.js
-          BTC_NEWS=$(cat btc_news.json)
+          
+          BTC_NEWS_DATA=$(cat btc_news.json)
 
           ############################################
-          # 7. BUILD PAYLOAD (KEEPING DIVISOR)
+          # 7. BUILD PAYLOAD
           ############################################
+         
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
             --arg btcDom "$GLOBAL_DOM%" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews "$BTC_NEWS" \
+            --argjson btcNews "$BTC_NEWS_DATA" \
             --arg btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
