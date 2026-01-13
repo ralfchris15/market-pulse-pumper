@@ -12,6 +12,7 @@ jobs:
       - name: Fetch and Deliver Intel
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
           CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
         run: |
           set -e
@@ -19,7 +20,7 @@ jobs:
           # 1. Fetch Global Dominance from CoinGecko
           GLOBAL_DATA=$(curl -s --compressed \
             -H "accept: application/json" \
-            -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
+            -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
             "https://api.coingecko.com/api/v3/global")
 
           GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
@@ -36,7 +37,7 @@ jobs:
             echo "⚠️ Binance Rate-Limited. Deploying CoinGecko Fallback..."
             CG_FALLBACK=$(curl -s --compressed \
               -H "accept: application/json" \
-              -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
+              -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
               "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true")
 
             BTC_PRICE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd // empty')
@@ -70,7 +71,7 @@ jobs:
           # 6. Fetch ALL Narratives
           SECTORS=$(curl -s --compressed \
             -H "accept: application/json" \
-            -H "x-cg-demo-api-key: ${{ secrets.COINGECKO_API_KEY }}" \
+            -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
             "https://api.coingecko.com/api/v3/coins/categories" \
             | jq -r '[.[] | select(.market_cap_change_24h != null)]
                      | sort_by(.market_cap_change_24h)
@@ -78,20 +79,26 @@ jobs:
                      | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%")
                      | join(", ")')
 
-          # 6.5 Fetch BTC Global News (Last 4 Hours)
+          # 6.5 Fetch BTC Global News (Last 4 Hours) — SAFE MODE
           BTC_NEWS_RAW=$(curl -s \
             "https://cryptopanic.com/api/v1/posts/?auth_token=$CRYPTOPANIC_KEY&currencies=BTC&public=true")
 
-          BTC_NEWS=$(echo "$BTC_NEWS_RAW" | jq '
-            [.results[]
-              | select((now - (.published_at | fromdateiso8601)) <= 14400)
-              | {
-                  title: .title,
-                  source: (.source.title // "Unknown"),
-                  publishedAt: .published_at
-                }
-            ] | .[:3]
-          ')
+          if echo "$BTC_NEWS_RAW" | jq -e . >/dev/null 2>&1; then
+            BTC_NEWS=$(echo "$BTC_NEWS_RAW" | jq '
+              [.results[]
+                | select(.published_at != null)
+                | select((now - (.published_at | fromdateiso8601)) <= 14400)
+                | {
+                    title: .title,
+                    source: (.source.title // "Unknown"),
+                    publishedAt: .published_at
+                  }
+              ] | .[:3]
+            ')
+          else
+            echo "⚠️ CryptoPanic returned invalid response. Skipping BTC news."
+            BTC_NEWS="[]"
+          fi
 
           # 7. GENERATE SECURE JSON PAYLOAD FILE
           jq -n \
