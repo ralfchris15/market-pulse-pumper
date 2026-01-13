@@ -10,18 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-      # ---------------------------------------------
-      # 0. INSTALL REQUIRED TOOLS (xq for RSS)
-      # ---------------------------------------------
-      - name: Install XML tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip
-          pip3 install yq
-
-      # ---------------------------------------------
-      # 1. FETCH AND DELIVER INTEL
-      # ---------------------------------------------
       - name: Fetch and Deliver Intel
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
@@ -104,35 +92,34 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (RSS — LAST 4 HOURS)
+          # 6.5 BTC GLOBAL NEWS (JSON RSS — LAST 4H)
           ############################################
-          echo "📰 Fetching BTC global news via RSS..."
-          export NOW=$(date -u +%s)
-          export FOUR_HOURS=14400
+          echo "📰 Fetching BTC global news (JSON RSS)..."
 
-          fetch_rss () {
-            curl -s "$1" |
-            xq -r '.rss.channel.item[] |
-              {
-                title: .title,
-                publishedAt: (.pubDate // .published),
-                source: "'$2'"
-              }'
+          NOW=$(date -u +%s)
+          FOUR_HOURS=14400
+
+          fetch_news () {
+            curl -s "$1" | jq -c --arg src "$2" '
+              .items[]?
+              | select(.date_published != null)
+              | select((now - (.date_published | fromdateiso8601)) <= '"$FOUR_HOURS"')
+              | {
+                  title: .title,
+                  source: $src,
+                  publishedAt: .date_published
+                }
+            '
           }
 
           BTC_NEWS=$(jq -s '
-            map(
-              select(
-                (.publishedAt | fromdateiso8601? // fromdate?) as $t
-                | $t != null and (env.NOW | tonumber) - $t <= env.FOUR_HOURS
-              )
-            )
-            | unique_by(.title)
+            unique_by(.title)
+            | sort_by(.publishedAt)
+            | reverse
             | .[:3]
           ' <(
-            fetch_rss "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
-            fetch_rss "https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
-            fetch_rss "https://bitcoinmagazine.com/.rss/full/" "BitcoinMagazine"
+            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
+            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
           ))
 
           ############################################
