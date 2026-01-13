@@ -91,28 +91,15 @@ jobs:
               | map("\(.name): \(.market_cap_change_24h | tonumber | . * 10 | round / 10)%")
               | join(", ")')
 
+         ############################################
+          # 6.5 FETCH NEWS VIA NODE SCRIPT
           ############################################
-          # 6.5 BTC GLOBAL NEWS (ROBUST)
-          ############################################
-          echo "📰 Fetching BTC global news..."
-          # Fetch using a real User-Agent to avoid 403 blocks
-          # Cointelegraph is more reliable than Coindesk for simple curl
-          RSS_DATA=$(curl -s -A "Mozilla/5.0" "https://cointelegraph.com/rss/tag/bitcoin" || echo "")
-          
-          # Extract titles safely using grep (handles CDATA and quotes)
-          # If no news found, it creates an empty JSON array []
-          if [ -n "$RSS_DATA" ]; then
-            BTC_NEWS=$(echo "$RSS_DATA" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 | jq -R . | jq -s 'map({title: ., source: "CoinTelegraph", publishedAt: "Just Now"})')
-          else
-            BTC_NEWS="[]"
-          fi
+          node fetch-news.js
+          BTC_NEWS=$(cat btc_news.json)
 
           ############################################
-          # 7. BUILD PAYLOAD (STRICT TYPES)
+          # 7. BUILD PAYLOAD (KEEPING YOUR DIVISOR)
           ############################################
-          # Ensure divisor is never exactly 0 to avoid backend math errors
-          SAFE_DIVISOR=${DIVISOR:-79.05}
-
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
@@ -132,7 +119,7 @@ jobs:
             }' > payload.json
 
           ############################################
-          # 8. DELIVER TO BACKEND
+          # 8. DELIVER TO VERCEL
           ############################################
           curl -X POST "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
