@@ -102,12 +102,12 @@ jobs:
           fetch_news () {
             curl -s "$1" | jq -c --arg src "$2" '
               .items[]?
-              | select(.date_published != null)
-              | select((now - (.date_published | fromdateiso8601)) <= '"$FOUR_HOURS"')
+              | select(.pubDate != null)
+              | select((now - (.pubDate | fromdateiso8601)) <= 14400)
               | {
                   title: .title,
                   source: $src,
-                  publishedAt: .date_published
+                  publishedAt: .pubDate
                 }
             '
           }
