@@ -92,27 +92,34 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (RAW RSS — FIXED)
+          # 6.5 BTC GLOBAL NEWS (RAW RSS — WORKING)
           ############################################
           echo "📰 Fetching BTC global news..."
 
-          fetch_news () {
-            curl -s "$1" | jq -c --arg src "$2" '
-              .items[]?
-              | select(.title != null)
-              | {
-                  title: .title,
-                  source: $src,
-                  publishedAt: (.pubDate // .published // .date // "Unknown")
+          fetch_rss () {
+            curl -s "$1" | \
+            sed 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
+            awk '
+              /<item>/,/<\/item>/ {
+                if ($0 ~ /<title>/) {
+                  gsub(/.*<title>|<\/title>.*/, "", $0)
+                  title=$0
                 }
-            '
+                if ($0 ~ /<pubDate>/) {
+                  gsub(/.*<pubDate>|<\/pubDate>.*/, "", $0)
+                  date=$0
+                }
+                if ($0 ~ /<\/item>/) {
+                  printf("{\"title\":\"%s\",\"source\":\"%s\",\"publishedAt\":\"%s\"}\n", title, SRC, date)
+                }
+              }'
           }
 
           BTC_NEWS=$(jq -s '
-            (unique_by(.title) | .[:3]) // []
+            unique_by(.title) | .[:3]
           ' <(
-            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
-            fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://cointelegraph.com/rss/tag/bitcoin" "CoinTelegraph"
+            SRC="CoinDesk" fetch_rss "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin"
+            SRC="CoinTelegraph" fetch_rss "https://cointelegraph.com/rss/tag/bitcoin"
           ))
 
           ############################################
