@@ -9,6 +9,19 @@ jobs:
   pump-data:
     runs-on: ubuntu-latest
     steps:
+
+      # ---------------------------------------------
+      # 0. INSTALL REQUIRED TOOLS (xq for RSS)
+      # ---------------------------------------------
+      - name: Install XML tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install yq
+
+      # ---------------------------------------------
+      # 1. FETCH AND DELIVER INTEL
+      # ---------------------------------------------
       - name: Fetch and Deliver Intel
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
@@ -29,6 +42,7 @@ jobs:
           ############################################
           # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
           ############################################
+          echo "Attempting Binance Fetch..."
           BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
 
@@ -36,6 +50,7 @@ jobs:
           BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
 
           if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" = "null" ]; then
+            echo "⚠️ Binance Rate-Limited. Using CoinGecko fallback..."
             CG_FALLBACK=$(curl -s --compressed \
               -H "accept: application/json" \
               -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
@@ -48,6 +63,7 @@ jobs:
           ############################################
           # 3. BTC DOM INDEX (BINANCE SAFE MODE)
           ############################################
+          echo "Fetching BTCDOMUSDT 24hr data..."
           BINANCE_DOM_24HR=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
 
@@ -55,20 +71,21 @@ jobs:
             BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
             DOM_CHANGE=$(echo "$BINANCE_DOM_24HR" | jq -r '.priceChangePercent // "0.00"')
           else
+            echo "⚠️ Invalid Binance DOM response. Using defaults."
             BINANCE_DOM="0.00"
             DOM_CHANGE="0.00"
           fi
 
           ############################################
-          # 4. SAFETY CHECK
+          # 4. FINAL SAFETY CHECK
           ############################################
           if [ -z "$BTC_PRICE" ]; then
-            echo "❌ BTC price unavailable"
+            echo "❌ CRITICAL: BTC price unavailable."
             exit 1
           fi
 
           ############################################
-          # 5. DIVISOR
+          # 5. CALIBRATION DIVISOR
           ############################################
           RAW_DIVISOR=$(echo "scale=6; $BINANCE_DOM / $GLOBAL_DOM" | bc -l)
           DIVISOR=$(printf "%.6f" $RAW_DIVISOR)
@@ -87,10 +104,11 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (RSS – LAST 4 HOURS)
+          # 6.5 BTC GLOBAL NEWS (RSS — LAST 4 HOURS)
           ############################################
-          NOW=$(date -u +%s)
-          FOUR_HOURS=14400
+          echo "📰 Fetching BTC global news via RSS..."
+          export NOW=$(date -u +%s)
+          export FOUR_HOURS=14400
 
           fetch_rss () {
             curl -s "$1" |
@@ -118,7 +136,7 @@ jobs:
           ))
 
           ############################################
-          # 7. PAYLOAD
+          # 7. BUILD PAYLOAD
           ############################################
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
@@ -139,7 +157,7 @@ jobs:
             }' > payload.json
 
           ############################################
-          # 8. SEND TO BACKEND
+          # 8. DELIVER TO BACKEND
           ############################################
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
             "https://crypto-ai-tool.vercel.app/api/analyze" \
