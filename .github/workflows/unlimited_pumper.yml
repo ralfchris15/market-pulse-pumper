@@ -132,7 +132,7 @@ jobs:
             --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews "$BTC_NEWS" \
+            --argjson btcNews '[{"title":"Test BTC News 1","source":"Test","publishedAt":"Just Now"},{"title":"Test BTC News 2","source":"Test","publishedAt":"Just Now"}]' \
             '{
               btcPrice: $btcPrice,
               btcChange: $btcChange,
