@@ -92,30 +92,24 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (JSON RSS — LAST 4H)
+          # 6.5 BTC GLOBAL NEWS (JSON RSS — SAFE MODE)
           ############################################
           echo "📰 Fetching BTC global news (JSON RSS)..."
-
-          NOW=$(date -u +%s)
-          FOUR_HOURS=14400
 
           fetch_news () {
             curl -s "$1" | jq -c --arg src "$2" '
               .items[]?
-              | select(.pubDate != null)
-              | select((now - (.pubDate | fromdateiso8601)) <= 14400)
+              | select(.title != null)
               | {
                   title: .title,
                   source: $src,
-                  publishedAt: .pubDate
+                  publishedAt: (.pubDate // .published // .date // "Unknown")
                 }
             '
           }
 
           BTC_NEWS=$(jq -s '
             unique_by(.title)
-            | sort_by(.publishedAt)
-            | reverse
             | .[:3]
           ' <(
             fetch_news "https://api.rss2json.com/v1/api.json?rss_url=https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" "CoinDesk"
