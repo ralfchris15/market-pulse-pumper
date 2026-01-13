@@ -15,6 +15,7 @@ jobs:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         run: |
+          # The main workflow runs with set -e (exit on error)
           set -e
 
           ############################################
@@ -31,6 +32,7 @@ jobs:
           # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
           ############################################
           echo "Attempting Binance Fetch..."
+          # The previous logic was already robust for this part if the API returned non-JSON/rate-limited error
           BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "api.binance.com")
 
@@ -96,11 +98,26 @@ jobs:
           ############################################
           echo "📰 Fetching BTC global news..."
 
+          # Modified fetch_rss function to be robust to curl errors internally
           fetch_rss () {
-            curl -s "$1" | \
-            # Simplified sed for basic entity decoding
+            local url=$1
+            local source_name=$2
+            local response
+            
+            # Temporarily disable set -e within the function to handle potential curl/network errors
+            set +e 
+            response=$(curl -s "$url")
+            if [ $? -ne 0 ]; then
+              echo "Error fetching RSS from $source_name, skipping." >&2
+              set -e # Re-enable set -e before exiting function if an error occurred
+              return 1
+            fi
+            set -e # Re-enable set -e for normal execution
+
+            # Process the response with awk
+            echo "$response" | \
             sed -e 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
-            awk -v SRC="$2" ' # Pass source as awk variable
+            awk -v SRC="$source_name" '
               /<item>/,/<\/item>/ {
                 if ($0 ~ /<title>/) {
                   gsub(/.*<title>|<\/title>.*/, "", $0)
@@ -118,6 +135,7 @@ jobs:
           }
           
           # Aggregate outputs from both feeds and process with jq
+          # Errors in fetch_rss will now be handled internally and won't stop the script with set -e
           ALL_NEWS=$(
             fetch_rss "www.coindesk.com" "CoinDesk"
             fetch_rss "cointelegraph.com" "CoinTelegraph"
