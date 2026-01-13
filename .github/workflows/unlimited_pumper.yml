@@ -15,7 +15,6 @@ jobs:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         run: |
-          # The main workflow runs with set -e (exit on error)
           set -e
 
           ############################################
@@ -24,7 +23,7 @@ jobs:
           GLOBAL_DATA=$(curl -s --compressed \
             -H "accept: application/json" \
             -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
-            "api.coingecko.com")
+            "https://api.coingecko.com/api/v3/global")
 
           GLOBAL_DOM=$(echo "$GLOBAL_DATA" | jq -r '.data.market_cap_percentage.btc // empty')
 
@@ -32,33 +31,29 @@ jobs:
           # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
           ############################################
           echo "Attempting Binance Fetch..."
-          # Fetch response and store in a temporary variable first
-          BINANCE_RESPONSE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
-            "api.binance.com")
+          BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+            "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
 
-          # Check if the response is valid JSON before parsing (to avoid jq error)
-          if echo "$BINANCE_RESPONSE_BTC" | jq -e . >/dev/null 2>&1; then
-            BTC_PRICE=$(echo "$BINANCE_RESPONSE_BTC" | jq -r '.lastPrice // empty')
-            BTC_CHANGE=$(echo "$BINANCE_RESPONSE_BTC" | jq -r '.priceChangePercent // empty')
-          else
-            echo "⚠️ Binance Rate-Limited or Invalid response. Using CoinGecko fallback..."
-            # Fallback logic remains unchanged
+          BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice // empty')
+          BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
+
+          if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" = "null" ]; then
+            echo "⚠️ Binance Rate-Limited. Using CoinGecko fallback..."
             CG_FALLBACK=$(curl -s --compressed \
               -H "accept: application/json" \
               -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
-              "api.coingecko.com")
+              "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true")
 
             BTC_PRICE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd')
             BTC_CHANGE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd_24h_change')
           fi
-
 
           ############################################
           # 3. BTC DOM INDEX (BINANCE SAFE MODE)
           ############################################
           echo "Fetching BTCDOMUSDT 24hr data..."
           BINANCE_DOM_24HR=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
-            "fapi.binance.com")
+            "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCDOMUSDT")
 
           if echo "$BINANCE_DOM_24HR" | jq -e . >/dev/null 2>&1; then
             BINANCE_DOM=$(echo "$BINANCE_DOM_24HR" | jq -r '.lastPrice // "0.00"')
@@ -89,7 +84,7 @@ jobs:
           SECTORS=$(curl -s --compressed \
             -H "accept: application/json" \
             -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
-            "api.coingecko.com" |
+            "https://api.coingecko.com/api/v3/coins/categories" |
             jq -r '[.[] | select(.market_cap_change_24h != null)]
               | sort_by(.market_cap_change_24h)
               | reverse
@@ -97,30 +92,14 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (RAW RSS — FIXED CODE)
+          # 6.5 BTC GLOBAL NEWS (RAW RSS — WORKING)
           ############################################
           echo "📰 Fetching BTC global news..."
 
-          # Modified fetch_rss function to be robust to curl errors internally
           fetch_rss () {
-            local url=$1
-            local source_name=$2
-            local response
-            
-            # Temporarily disable set -e within the function to handle potential curl/network errors
-            set +e 
-            response=$(curl -s "$url")
-            if [ $? -ne 0 ]; then
-              echo "Error fetching RSS from $source_name, skipping." >&2
-              set -e # Re-enable set -e before exiting function if an error occurred
-              return 1
-            fi
-            set -e # Re-enable set -e for normal execution
-
-            # Process the response with awk
-            echo "$response" | \
-            sed -e 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
-            awk -v SRC="$source_name" '
+            curl -s "$1" | \
+            sed 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
+            awk '
               /<item>/,/<\/item>/ {
                 if ($0 ~ /<title>/) {
                   gsub(/.*<title>|<\/title>.*/, "", $0)
@@ -133,20 +112,15 @@ jobs:
                 if ($0 ~ /<\/item>/) {
                   printf("{\"title\":\"%s\",\"source\":\"%s\",\"publishedAt\":\"%s\"}\n", title, SRC, date)
                 }
-              }
-            '
+              }'
           }
-          
-          # Aggregate outputs from both feeds and process with jq
-          ALL_NEWS=$(
-            fetch_rss "www.coindesk.com" "CoinDesk"
-            fetch_rss "cointelegraph.com" "CoinTelegraph"
-          )
 
-          # Use a single jq command to filter and format the combined output into a valid JSON array
-          BTC_NEWS=$(echo "$ALL_NEWS" | jq -s '
+          BTC_NEWS=$(jq -s '
             unique_by(.title) | .[:3]
-          ')
+          ' <(
+            SRC="CoinDesk" fetch_rss "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin"
+            SRC="CoinTelegraph" fetch_rss "https://cointelegraph.com/rss/tag/bitcoin"
+          ))
 
           ############################################
           # 7. BUILD PAYLOAD
@@ -173,7 +147,7 @@ jobs:
           # 8. DELIVER TO BACKEND
           ############################################
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            "crypto-ai-tool.vercel.app" \
+            "https://crypto-ai-tool.vercel.app/api/analyze" \
             -H "Authorization: Bearer ${{ secrets.INTERNAL_SYNC_SECRET }}" \
             -H "Content-Type: application/json" \
             -H "Origin: https://aichartsniper.com" \
