@@ -92,39 +92,23 @@ jobs:
               | join(", ")')
 
           ############################################
-          # 6.5 BTC GLOBAL NEWS (RAW RSS — WORKING)
+          # 6.5 BTC GLOBAL NEWS (ROBUST VERSION)
           ############################################
           echo "📰 Fetching BTC global news..."
 
-          fetch_rss () {
-            curl -s "$1" | \
-            sed 's/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
-            awk '
-              /<item>/,/<\/item>/ {
-                if ($0 ~ /<title>/) {
-                  gsub(/.*<title>|<\/title>.*/, "", $0)
-                  title=$0
-                }
-                if ($0 ~ /<pubDate>/) {
-                  gsub(/.*<pubDate>|<\/pubDate>.*/, "", $0)
-                  date=$0
-                }
-                if ($0 ~ /<\/item>/) {
-                  printf("{\"title\":\"%s\",\"source\":\"%s\",\"publishedAt\":\"%s\"}\n", title, SRC, date)
-                }
-              }'
-          }
+          # Fetch and convert to a safe JSON array
+          # If curl fails or news is empty, we force an empty array [ ]
+          RAW_NEWS=$(curl -s "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin" | grep -oP '(?<=<title><!\[CDATA\[).*?(?=\]\]></title>)' | head -n 3 || echo "")
+          
+          # Convert newline list to JSON array safely
+          BTC_NEWS_JSON=$(echo "$RAW_NEWS" | jq -R . | jq -s 'map({title: ., source: "CoinDesk", publishedAt: "Just Now"})')
 
-          BTC_NEWS=$(jq -s '
-            unique_by(.title) | .[:3]
-          ' <(
-            SRC="CoinDesk" fetch_rss "https://www.coindesk.com/arc/outboundfeeds/rss/?tags=bitcoin"
-            SRC="CoinTelegraph" fetch_rss "https://cointelegraph.com/rss/tag/bitcoin"
-          ))
+          if [ -z "$RAW_NEWS" ]; then BTC_NEWS_JSON="[]"; fi
 
           ############################################
-          # 7. BUILD PAYLOAD
+          # 7. BUILD PAYLOAD (SAFE ARGUMENTS)
           ############################################
+          # Using --arg for strings and --argjson ONLY when we are sure it is valid JSON
           jq -n \
             --arg btcPrice "$BTC_PRICE" \
             --arg btcChange "$BTC_CHANGE" \
@@ -132,7 +116,7 @@ jobs:
             --arg domChange "$DOM_CHANGE" \
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
-            --argjson btcNews "$BTC_NEWS" \
+            --argjson btcNews "$BTC_NEWS_JSON" \
             --arg btcNewsLastUpdated "$(date +%s)" \
             '{
               btcPrice: $btcPrice,
