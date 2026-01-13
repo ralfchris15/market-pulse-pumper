@@ -112,7 +112,7 @@ jobs:
             --arg sec "$SECTORS" \
             --arg div "$DIVISOR" \
             --argjson btcNews "$(cat btc_news.json)" \
-            --arg btcNewsLastUpdated "$(date +%s)" \
+            --arg btcNewsLastUpdated "$(date +%s%3N)" \
             '{
               btcPrice: $btcPrice,
               btcChange: $btcChange,
