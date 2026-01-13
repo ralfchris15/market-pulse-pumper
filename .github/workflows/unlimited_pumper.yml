@@ -32,15 +32,17 @@ jobs:
           # 2. BTC PRICE & 24H CHANGE (BINANCE → CG)
           ############################################
           echo "Attempting Binance Fetch..."
-          # The previous logic was already robust for this part if the API returned non-JSON/rate-limited error
-          BINANCE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+          # Fetch response and store in a temporary variable first
+          BINANCE_RESPONSE_BTC=$(curl -s -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
             "api.binance.com")
 
-          BTC_PRICE=$(echo "$BINANCE_BTC" | jq -r '.lastPrice // empty')
-          BTC_CHANGE=$(echo "$BINANCE_BTC" | jq -r '.priceChangePercent // empty')
-
-          if [ -z "$BTC_PRICE" ] || [ "$BTC_PRICE" = "null" ]; then
-            echo "⚠️ Binance Rate-Limited. Using CoinGecko fallback..."
+          # Check if the response is valid JSON before parsing (to avoid jq error)
+          if echo "$BINANCE_RESPONSE_BTC" | jq -e . >/dev/null 2>&1; then
+            BTC_PRICE=$(echo "$BINANCE_RESPONSE_BTC" | jq -r '.lastPrice // empty')
+            BTC_CHANGE=$(echo "$BINANCE_RESPONSE_BTC" | jq -r '.priceChangePercent // empty')
+          else
+            echo "⚠️ Binance Rate-Limited or Invalid response. Using CoinGecko fallback..."
+            # Fallback logic remains unchanged
             CG_FALLBACK=$(curl -s --compressed \
               -H "accept: application/json" \
               -H "x-cg-demo-api-key: $COINGECKO_API_KEY" \
@@ -49,6 +51,7 @@ jobs:
             BTC_PRICE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd')
             BTC_CHANGE=$(echo "$CG_FALLBACK" | jq -r '.bitcoin.usd_24h_change')
           fi
+
 
           ############################################
           # 3. BTC DOM INDEX (BINANCE SAFE MODE)
@@ -135,7 +138,6 @@ jobs:
           }
           
           # Aggregate outputs from both feeds and process with jq
-          # Errors in fetch_rss will now be handled internally and won't stop the script with set -e
           ALL_NEWS=$(
             fetch_rss "www.coindesk.com" "CoinDesk"
             fetch_rss "cointelegraph.com" "CoinTelegraph"
